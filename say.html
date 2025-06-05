@@ -2,185 +2,178 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>🔍 Scan &amp; Speak QR 🔈</title>
+  <title>QR → Arabic Name Scanner with TTS</title>
+
+  <!-- Html5QrcodeScanner library (from CDN) -->
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
   <style>
-    body {
-      font-family: sans-serif;
-      margin: 1.5rem;
-      text-align: center;
-      background: #f5f5f5;
+    /* Basic reset & centering */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: Arial, sans-serif;
+      background-color: #f9f9f9;
     }
-    h1 {
-      margin-bottom: 1rem;
-      font-size: 1.75rem;
+    #scanner-container,
+    #result-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
     }
+    /* The QR “frame” */
     #reader {
-      width: 100%;
-      max-width: 400px;
-      margin: 0 auto;
-      border: 2px solid #666;
-      border-radius: 8px;
-      overflow: hidden;
-      background: #000;
+      width: 300px;
+      max-width: 90%;
     }
-    #status {
-      margin-top: 1rem;
-      font-size: 1.25rem;
-      min-height: 1.5em;
+    /* Displayed Arabic name */
+    #name-display {
+      font-size: 1.5em;
+      margin: 20px 0;
+      direction: rtl; /* right-to-left text for Arabic */
     }
-    #postUI {
-      margin-top: 2rem;
-      display: none; /* hidden until a QR is detected */
-    }
-    #detectedName {
-      font-weight: bold;
-      font-size: 1.5rem;
-      margin: 0.5rem 0;
-      direction: rtl; /* Arabic text runs right-to-left */
-    }
-    #postUI button {
-      font-size: 1rem;
-      padding: 0.5rem 1rem;
-      margin: 0 0.5rem;
+    button {
+      padding: 10px 20px;
+      font-size: 1em;
+      margin: 5px;
       cursor: pointer;
-      border: 1px solid #666;
-      background: #fff;
-      border-radius: 4px;
-    }
-    #postUI button:hover {
-      background: #eee;
     }
   </style>
-
-  <!-- Include Html5QrcodeScanner from CDN -->
-  <script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
 </head>
 <body>
-  <h1>🔍 Scan &amp; Speak QR 🔈</h1>
+  <!-- Scanner view (shown on page load and when “Scan Another” is clicked) -->
+  <div id="scanner-container">
+    <!-- Html5QrcodeScanner will inject its UI into this DIV -->
+    <div id="reader"></div>
+  </div>
 
-  <!-- 1) This div will host the Html5QrcodeScanner UI -->
-  <div id="reader"></div>
-
-  <!-- 2) Status line -->
-  <div id="status">Point your camera at a QR code…</div>
-
-  <!-- 3) After scanning, show detected Arabic text + buttons -->
-  <div id="postUI">
-    <div>Detected name:</div>
-    <div id="detectedName">—</div>
-    <button id="btnSpeak">▶️ Speak Name</button>
-    <button id="btnScanAnother">🔄 Scan Another</button>
+  <!-- Post-scan view (hidden until a QR is decoded) -->
+  <div id="result-container" style="display: none;">
+    <p id="name-display"></p>
+    <button id="speak-btn">▶️ Speak Name</button>
+    <button id="scan-btn">🔄 Scan Another</button>
   </div>
 
   <script>
-    // ===== CONFIGURATION =====
-    // Your VoiceRSS TTS API key (free tier) for Arabic:
-    const VOICERSS_API_KEY = "1994072a28604a5d9a23bdc4c3a91ea8";
+    // Your VoiceRSS API key
+    const VOICERSS_KEY = '1994072a28604a5d9a23bdc4c3a91ea8';
 
-    // Build a VoiceRSS URL given some Arabic text
-    function makeTtsUrl(text) {
-      const base = "https://api.voicerss.org/";
-      const params = new URLSearchParams({
-        key: VOICERSS_API_KEY,
-        hl: "ar-sa",            // Arabic (Saudi Arabia)
-        c: "MP3",               // MP3 output
-        src: text,              // the Arabic string
-        f: "48khz_16bit_stereo" // high-quality stereo
-      });
-      return `${base}?${params.toString()}`;
-    }
+    let currentName = '';
+    let currentAudio = null;
+    let scanner = null;
 
-    // ===== STATE =====
-    let html5QrcodeScanner = null;
-    let lastDecodedName = "";
+    /**
+     * Initializes (or re-initializes) the Html5QrcodeScanner on #reader,
+     * automatically opening the rear camera.
+     */
+    function initScanner() {
+      // Hide the “post-scan” UI, show the scanner UI
+      document.getElementById('result-container').style.display = 'none';
+      document.getElementById('scanner-container').style.display = 'flex';
 
-    // ===== onScanSuccess =====
-    function onScanSuccess(decodedText, decodedResult) {
-      // 1) Stop & clear the scanner (hides the camera preview)
-      html5QrcodeScanner.clear().catch(() => {});
-      html5QrcodeScanner = null;
+      // Clear out the #reader DIV (in case we’re re-instantiating)
+      const scannerContainer = document.getElementById('scanner-container');
+      scannerContainer.innerHTML = '<div id="reader"></div>';
 
-      // 2) Extract Arabic name: if decodedText is a URL with ?name=…, grab that, else raw
-      let nameToSpeak = decodedText;
-      try {
-        const parsedUrl = new URL(decodedText);
-        const maybe = parsedUrl.searchParams.get("name");
-        if (maybe) {
-          nameToSpeak = maybe;
-        }
-      } catch (_) {
-        // not a URL → use raw decodedText
-      }
+      // Configuration: 10 FPS, 250×250 box, auto-select rear camera (“environment”)
+      const config = {
+        fps: 10,
+        qrbox: 250,
+        videoConstraints: { facingMode: { exact: "environment" } }
+      };
 
-      lastDecodedName = nameToSpeak;
-      document.getElementById("detectedName").textContent = nameToSpeak;
-
-      // 3) Hide the camera view, show post-scan UI
-      document.getElementById("reader").style.display = "none";
-      document.getElementById("postUI").style.display = "block";
-      document.getElementById("status").textContent =
-        "✅ Done speaking. Click “Scan Another” to scan again.";
-
-      // 4) Auto-play TTS via VoiceRSS
-      playTts(nameToSpeak);
-    }
-
-    // ===== onScanFailure (ignored) =====
-    function onScanFailure(error) {
-      // no-op: scanning continues
-    }
-
-    // ===== startScanner =====
-    function startScanner() {
-      // Reset UI
-      document.getElementById("reader").style.display = "block";
-      document.getElementById("postUI").style.display = "none";
-      document.getElementById("status").textContent = "⌛ Loading camera…";
-
-      // Instantiate a new Html5QrcodeScanner, which handles camera permission and selector
-      html5QrcodeScanner = new Html5QrcodeScanner(
+      // Create a new Html5QrcodeScanner instance
+      scanner = new Html5QrcodeScanner(
         "reader",
-        { fps: 10, qrbox: 250 },
+        config,
         /* verbose= */ false
       );
-      html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+
+      // Start scanning. onScanSuccess will be called as soon as a QR is detected.
+      scanner.render(onScanSuccess);
     }
 
-    // ===== playTts =====
-    function playTts(text) {
-      if (!VOICERSS_API_KEY) {
-        console.warn("Missing VoiceRSS API key.");
-        return;
-      }
-      const audioUrl = makeTtsUrl(text);
-      let audio = document.getElementById("ttsAudio");
-      if (!audio) {
-        audio = document.createElement("audio");
-        audio.id = "ttsAudio";
-        document.body.appendChild(audio);
-      }
-      audio.src = audioUrl;
-      audio.play().catch(err => {
-        console.warn("TTS playback failed:", err);
+    /**
+     * Called by Html5QrcodeScanner when a QR code is successfully decoded.
+     * @param {string} decodedText  – the raw text from the QR
+     * @param {*} decodedResult
+     */
+    function onScanSuccess(decodedText, decodedResult) {
+      // Stop & clear the scanner so the camera turns off
+      scanner.clear().then(() => {
+        // 1. Extract an Arabic name:
+        //    • If decodedText is a URL containing “?name=…”, grab that parameter.
+        //    • Otherwise, assume decodedText is the plain Arabic string.
+        let name = '';
+        try {
+          const url = new URL(decodedText);
+          const param = url.searchParams.get('name');
+          if (param) {
+            // URL-decode “name” and use it
+            name = decodeURIComponent(param);
+          } else {
+            // It was a URL but no “name=” present → use the full text
+            name = decodedText;
+          }
+        } catch (e) {
+          // Not a valid URL → assume plain Arabic text
+          name = decodedText;
+        }
+
+        currentName = name;
+        // Display the Arabic name on screen
+        document.getElementById('name-display').innerText = name;
+
+        // 2. Build the VoiceRSS TTS URL
+        const ttsUrl =
+          'https://api.voicerss.org/' +
+          '?key=' + VOICERSS_KEY +
+          '&hl=ar-sa' +
+          '&c=MP3' +
+          '&src=' + encodeURIComponent(name) +
+          '&f=48khz_16bit_stereo';
+
+        // 3. Create an Audio object, auto-play it
+        currentAudio = new Audio(ttsUrl);
+        currentAudio.play().catch(err => {
+          // In some browsers, autoplay may be blocked unless there was a user gesture.
+          console.warn('Autoplay was blocked:', err);
+        });
+
+        // 4. Show the “post-scan” UI
+        document.getElementById('scanner-container').style.display = 'none';
+        document.getElementById('result-container').style.display = 'flex';
+      }).catch(err => {
+        console.error('Failed to clear Html5QrcodeScanner:', err);
       });
     }
 
-    // ===== “Speak Name” button =====
-    document.getElementById("btnSpeak").addEventListener("click", () => {
-      if (lastDecodedName) {
-        playTts(lastDecodedName);
-      }
-    });
+    // Once the DOM is ready, set up event listeners and start the scanner
+    document.addEventListener('DOMContentLoaded', () => {
+      // 1. Initialize scanner on load
+      initScanner();
 
-    // ===== “Scan Another” button =====
-    document.getElementById("btnScanAnother").addEventListener("click", () => {
-      document.getElementById("status").textContent = "Point your camera at a QR code…";
-      startScanner();
-    });
+      // 2. “Speak Name” button: replay the last TTS
+      document.getElementById('speak-btn').addEventListener('click', () => {
+        if (currentAudio) {
+          currentAudio.currentTime = 0;
+          currentAudio.play().catch(err => {
+            console.warn('Play blocked:', err);
+          });
+        }
+      });
 
-    // ===== On page load, start scanning (rear camera by default) =====
-    window.addEventListener("DOMContentLoaded", () => {
-      startScanner();
+      // 3. “Scan Another” button: re-initialize the scanner (no page reload)
+      document.getElementById('scan-btn').addEventListener('click', () => {
+        // If a previous scanner is hanging around, clear it explicitly
+        if (scanner) {
+          scanner.clear().catch(() => {});
+        }
+        initScanner();
+      });
     });
   </script>
 </body>
