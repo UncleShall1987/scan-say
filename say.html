@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Scan &amp; Speak QR (Front/Rear)</title>
+  <title>Scan &amp; Speak QR (Front/Rear + “Scan Another”)</title>
   <style>
     body {
       font-family: sans-serif;
@@ -12,13 +12,10 @@
     h1 {
       margin-bottom: 1rem;
     }
-    #buttons {
-      margin-bottom: 1rem;
-    }
-    #buttons button {
+    #topButtons button {
       font-size: 1rem;
       padding: 0.5rem 1rem;
-      margin: 0 0.5rem;
+      margin: 0 0.5rem 1rem 0.5rem;
       cursor: pointer;
     }
     #reader {
@@ -33,81 +30,114 @@
       margin-top: 1rem;
       font-size: 1.25rem;
     }
+    #postUI {
+      margin-top: 2rem;
+      display: none; /* hidden until QR is decoded */
+    }
+    #postUI button {
+      font-size: 1rem;
+      padding: 0.5rem 1rem;
+      margin: 0 0.5rem;
+      cursor: pointer;
+    }
+    #detectedName {
+      font-weight: bold;
+      font-size: 1.5rem;
+      margin: 0.5rem 0;
+    }
   </style>
 
-  <!-- 1) Load the html5-qrcode library from CDN -->
+  <!-- Load html5-qrcode from CDN -->
   <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body>
   <h1>🔍 Scan &amp; Speak QR 🔈</h1>
 
-  <!-- 2) Buttons to choose front or rear camera -->
-  <div id="buttons">
+  <!-- 1) Buttons to choose front or rear camera -->
+  <div id="topButtons">
     <button id="btnRear">📷 Rear Camera</button>
     <button id="btnFront">🤳 Front Camera</button>
   </div>
 
-  <!-- 3) QR reader container -->
+  <!-- 2) QR reader container -->
   <div id="reader"></div>
 
+  <!-- 3) Status / instructions -->
   <div id="status">Point your camera at a QR code…</div>
 
-  <script>
-    // Reference to the Html5Qrcode scanner instance
-    let qrScanner = null;
+  <!-- 4) Post‐scan UI (hidden until a QR is decoded) -->
+  <div id="postUI">
+    <div>Detected name:</div>
+    <div id="detectedName">—</div>
+    <button id="btnSpeak">▶️ Speak Name</button>
+    <button id="btnScanAnother">🔄 Scan Another</button>
+  </div>
 
-    // Convenience: update status text
+  <script>
+    let qrScanner = null;
+    let currentFacingMode = "environment"; // default: rear camera
+    let lastDecodedName = "";
+
+    const statusEl = document.getElementById("status");
+    const readerEl = document.getElementById("reader");
+    const postUI = document.getElementById("postUI");
+    const detectedNameEl = document.getElementById("detectedName");
+    const btnSpeak = document.getElementById("btnSpeak");
+    const btnScanAnother = document.getElementById("btnScanAnother");
+    const btnRear = document.getElementById("btnRear");
+    const btnFront = document.getElementById("btnFront");
+
     function setStatus(msg) {
-      document.getElementById("status").textContent = msg;
+      statusEl.textContent = msg;
     }
 
-    // 4) Called when a QR is successfully decoded
+    // Called when a QR is successfully decoded
     function onScanSuccess(decodedText, decodedResult) {
-      // 4a) Stop scanning immediately
+      // 1) Stop scanning immediately
       qrScanner
         .stop()
         .then(() => {
-          // scanner cleared
+          // scanner stopped
         })
         .catch(err => {
           console.warn("Could not stop scanner:", err);
         });
 
-      // 4b) Determine what to speak: if it's a URL with ?name=, extract the name
+      // 2) Figure out the name to speak
       let nameToSpeak = decodedText;
       try {
+        // If decodedText is a URL with ?name=XYZ, extract that
         const url = new URL(decodedText);
         const candidate = url.searchParams.get("name");
         if (candidate) {
           nameToSpeak = candidate;
         }
       } catch (e) {
-        // not a URL—just use decodedText directly
+        // Not a URL—use decodedText directly
       }
 
-      setStatus("🔈 Speaking: " + nameToSpeak);
-      const utter = new SpeechSynthesisUtterance(nameToSpeak);
-      speechSynthesis.speak(utter);
+      lastDecodedName = nameToSpeak;
+      detectedNameEl.textContent = nameToSpeak;
 
-      // 4c) After speaking finishes, prompt the user to scan again or switch camera
-      utter.onend = () => {
-        setStatus("✅ Done speaking. Click a button to scan again.");
-      };
+      // 3) Hide the scanner preview, show postUI
+      readerEl.style.display = "none";
+      postUI.style.display = "block";
+      setStatus("✅ QR detected. You can now speak the name or scan another.");
     }
 
-    // 5) Called continuously when no QR is found in a frame; we ignore it
+    // Called continuously when no QR is found in a frame (ignored)
     function onScanFailure(errorMessage) {
       // no-op
     }
 
-    // 6) Start the scanner with a given facingMode ("environment" or "user")
-    function startCamera(facingMode) {
-      // If scanner already exists, stop it first
+    // Create & start a new Html5Qrcode() scanner for a given facingMode
+    function startScanner(facingMode) {
+      // If a scanner already exists, stop & clear it first
       if (qrScanner) {
         qrScanner
           .stop()
           .catch(() => {
-            /* ignore failure to stop */
+            /* ignore stop errors */
           })
           .finally(() => {
             qrScanner.clear().catch(() => {});
@@ -118,46 +148,70 @@
       }
     }
 
-    // 7) Helper to create a new Html5Qrcode() instance and start scanning
+    // Instantiate html5-qrcode and start scanning
     function createAndStartScanner(facingMode) {
+      currentFacingMode = facingMode;
+      // Show the preview container, hide postUI
+      readerEl.style.display = "block";
+      postUI.style.display = "none";
+      setStatus("⌛ Loading camera…");
+
       qrScanner = new Html5Qrcode("reader");
       const config = {
-        fps: 10,        // scan frames per second
-        qrbox: 250,     // 250×250px scanning box
+        fps: 10,
+        qrbox: 250,
         experimentalFeatures: {
           useBarCodeDetectorIfSupported: true
         }
       };
-      const constraints = { facingMode: facingMode };
 
       qrScanner
         .start(
-          constraints,
+          { facingMode: facingMode },
           config,
           onScanSuccess,
           onScanFailure
         )
         .then(() => {
-          setStatus("📷 Scanning with “" + (facingMode === "user" ? "Front" : "Rear") + "” camera…");
+          setStatus("📷 Scanning with “" +
+                    (facingMode === "user" ? "Front" : "Rear") +
+                    "” camera…");
         })
         .catch(err => {
           setStatus("❌ Error starting camera: " + err);
         });
     }
 
-    // 8) Wire up button clicks
-    document.getElementById("btnRear").addEventListener("click", () => {
-      setStatus("🔄 Switching to Rear Camera…");
-      startCamera("environment");
-    });
-    document.getElementById("btnFront").addEventListener("click", () => {
-      setStatus("🔄 Switching to Front Camera…");
-      startCamera("user");
+    // 5) When "Speak Name" is clicked, actually invoke TTS
+    btnSpeak.addEventListener("click", () => {
+      if (!lastDecodedName) return;
+      setStatus("🔈 Speaking: " + lastDecodedName);
+      const utter = new SpeechSynthesisUtterance(lastDecodedName);
+      speechSynthesis.speak(utter);
+      utter.onend = () => {
+        setStatus("✅ Done speaking. Click “Scan Another” to decode a new QR.");
+      };
     });
 
-    // 9) On page load, default to rear camera
+    // 6) When "Scan Another" is clicked, restart scanning
+    btnScanAnother.addEventListener("click", () => {
+      setStatus("🔄 Scanning…");
+      startScanner(currentFacingMode);
+    });
+
+    // 7) Wire up the camera‐switch buttons
+    btnRear.addEventListener("click", () => {
+      setStatus("🔄 Switching to Rear Camera…");
+      startScanner("environment");
+    });
+    btnFront.addEventListener("click", () => {
+      setStatus("🔄 Switching to Front Camera…");
+      startScanner("user");
+    });
+
+    // 8) On page load, default to rear camera
     window.addEventListener("DOMContentLoaded", () => {
-      startCamera("environment");
+      startScanner("environment");
     });
   </script>
 </body>
