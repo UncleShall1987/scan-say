@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Scan & Speak QR</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 1.5rem;
+      text-align: center;
+    }
+    #reader {
+      width: 100%;
+      max-width: 400px;
+      margin: 1rem auto;
+      border: 2px solid #666;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    #status {
+      margin-top: 1rem;
+      font-size: 1.25rem;
+    }
+  </style>
+  <!-- 1) Load the html5-qrcode library from CDN -->
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+</head>
+<body>
+  <h1>🔍 Scan a QR to Hear the Name 🔈</h1>
+  <div id="reader"></div>
+  <div id="status">Point your camera at a QR code…</div>
+
+  <script>
+    // 2) Once a QR is detected, this callback runs with the decoded text.
+    function onScanSuccess(decodedText, decodedResult) {
+      // Stop further scanning as soon as we get one result:
+      html5QrcodeScanner.clear().catch(error => {
+        console.error("Failed to clear QR scanner:", error);
+      });
+
+      // 3) Interpret the decodedText:
+      //    - If your QR contains a full URL with ?name=Foo%20Bar, extract the 'name' param.
+      //    - Otherwise, assume the QR is just the plain name itself.
+      let nameToSpeak = decodedText;
+
+      // If decodedText looks like a URL and has “?name=”:
+      try {
+        const url = new URL(decodedText);
+        const maybeName = url.searchParams.get("name");
+        if (maybeName) {
+          // URL‐decode it before speaking:
+          nameToSpeak = maybeName;
+        }
+      } catch (e) {
+        // not a valid URL—just treat decodedText as the name
+      }
+
+      document.getElementById("status").textContent = "🔈 Speaking: " + nameToSpeak;
+
+      // 4) Use Web Speech API to speak the name:
+      const utter = new SpeechSynthesisUtterance(nameToSpeak);
+      // (Optional) You can pick a voice or adjust rate/pitch here:
+      // const voices = speechSynthesis.getVoices();
+      // utter.voice = voices.find(v => v.lang.startsWith("en")) || voices[0];
+      // utter.rate = 1;
+      // utter.pitch = 1;
+      speechSynthesis.speak(utter);
+
+      // 5) Optionally, if you want to scan again after speaking is done:
+      utter.onend = () => {
+        document.getElementById("status").textContent = "✅ Done speaking. Point again to scan a new QR.";
+        // You can restart the scanner if desired—uncomment below:
+        // html5QrcodeScanner.start(
+        //   { facingMode: "environment" },
+        //   config,
+        //   onScanSuccess,
+        //   onScanFailure
+        // );
+      };
+    }
+
+    function onScanFailure(errorMessage) {
+      // We can ignore or log scan failures (no valid QR in view)
+      //console.warn(`QR scan failed: ${errorMessage}`);
+    }
+
+    // 6) Create and configure the html5-qrcode scanner:
+    const html5QrcodeScanner = new Html5Qrcode(/* element id = */ "reader");
+    const config = {
+      fps: 10,    // Scans frames per second
+      qrbox: 250  // 250px square scanning region in the middle
+    };
+
+    // 7) Request camera access and start scanning:
+    Html5Qrcode.getCameras().then(cameras => {
+      if (cameras && cameras.length) {
+        // Use the back camera if available
+        const cameraId = cameras[0].id;
+        html5QrcodeScanner.start(
+          cameraId,
+          config,
+          onScanSuccess,
+          onScanFailure
+        ).catch(err => {
+          document.getElementById("status").textContent =
+            "❌ Camera error: " + err;
+        });
+      } else {
+        document.getElementById("status").textContent =
+          "❌ No camera found.";
+      }
+    }).catch(err => {
+      document.getElementById("status").textContent =
+        "❌ Could not access cameras: " + err;
+    });
+  </script>
+</body>
+</html>
