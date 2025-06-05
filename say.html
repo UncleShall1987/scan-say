@@ -2,22 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Scan & Speak QR (with Camera Switch)</title>
+  <title>Scan &amp; Speak QR (Front/Rear)</title>
   <style>
     body {
       font-family: sans-serif;
       margin: 1.5rem;
       text-align: center;
     }
-    #cameraSelect {
-      font-size: 1rem;
-      padding: 0.5rem;
+    h1 {
       margin-bottom: 1rem;
+    }
+    #buttons {
+      margin-bottom: 1rem;
+    }
+    #buttons button {
+      font-size: 1rem;
+      padding: 0.5rem 1rem;
+      margin: 0 0.5rem;
+      cursor: pointer;
     }
     #reader {
       width: 100%;
       max-width: 400px;
-      margin: 1rem auto;
+      margin: 0 auto;
       border: 2px solid #666;
       border-radius: 8px;
       overflow: hidden;
@@ -28,142 +35,129 @@
     }
   </style>
 
-  <!-- Load html5-qrcode from CDN -->
+  <!-- 1) Load the html5-qrcode library from CDN -->
   <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body>
-  <h1>🔍 Scan & Speak QR 🔈</h1>
+  <h1>🔍 Scan &amp; Speak QR 🔈</h1>
 
-  <!-- Camera dropdown -->
-  <select id="cameraSelect">
-    <option value="">Loading cameras...</option>
-  </select>
+  <!-- 2) Buttons to choose front or rear camera -->
+  <div id="buttons">
+    <button id="btnRear">📷 Rear Camera</button>
+    <button id="btnFront">🤳 Front Camera</button>
+  </div>
 
-  <!-- QR reader placeholder -->
+  <!-- 3) QR reader container -->
   <div id="reader"></div>
 
   <div id="status">Point your camera at a QR code…</div>
 
   <script>
-    // Reference to html5-qrcode scanner instance
-    let html5QrcodeScanner = null;
-    let currentCameraId = null;
+    // Reference to the Html5Qrcode scanner instance
+    let qrScanner = null;
 
-    const statusEl = document.getElementById("status");
-    const cameraSelectEl = document.getElementById("cameraSelect");
+    // Convenience: update status text
+    function setStatus(msg) {
+      document.getElementById("status").textContent = msg;
+    }
 
-    // Called whenever a QR is successfully decoded
+    // 4) Called when a QR is successfully decoded
     function onScanSuccess(decodedText, decodedResult) {
-      // Stop further scanning immediately
-      html5QrcodeScanner.clear().catch(err => {
-        console.warn("Failed to clear QR scanner:", err);
-      });
+      // 4a) Stop scanning immediately
+      qrScanner
+        .stop()
+        .then(() => {
+          // scanner cleared
+        })
+        .catch(err => {
+          console.warn("Could not stop scanner:", err);
+        });
 
-      // Determine the name to speak:
+      // 4b) Determine what to speak: if it's a URL with ?name=, extract the name
       let nameToSpeak = decodedText;
       try {
-        // If the QR text is a URL with ?name=XYZ, extract that
         const url = new URL(decodedText);
-        const maybeName = url.searchParams.get("name");
-        if (maybeName) {
-          nameToSpeak = maybeName;
+        const candidate = url.searchParams.get("name");
+        if (candidate) {
+          nameToSpeak = candidate;
         }
       } catch (e) {
-        // Not a URL—use decodedText directly
+        // not a URL—just use decodedText directly
       }
 
-      statusEl.textContent = "🔈 Speaking: " + nameToSpeak;
+      setStatus("🔈 Speaking: " + nameToSpeak);
       const utter = new SpeechSynthesisUtterance(nameToSpeak);
       speechSynthesis.speak(utter);
 
-      // Once speaking ends, update status (optional) and let user switch or rescan
+      // 4c) After speaking finishes, prompt the user to scan again or switch camera
       utter.onend = () => {
-        statusEl.textContent = "✅ Done speaking. Change camera or point at another QR.";
+        setStatus("✅ Done speaking. Click a button to scan again.");
       };
     }
 
-    // Called on scan failure (when no QR is found in a frame)
+    // 5) Called continuously when no QR is found in a frame; we ignore it
     function onScanFailure(errorMessage) {
-      // We can ignore / debounce these errors
-      // console.debug("QR scan failure:", errorMessage);
+      // no-op
     }
 
-    // Start scanning using the given cameraId
-    function startScanner(cameraId) {
-      if (html5QrcodeScanner) {
-        html5QrcodeScanner.clear().catch(() => {
-          /* ignore failure to clear */ 
-        });
+    // 6) Start the scanner with a given facingMode ("environment" or "user")
+    function startCamera(facingMode) {
+      // If scanner already exists, stop it first
+      if (qrScanner) {
+        qrScanner
+          .stop()
+          .catch(() => {
+            /* ignore failure to stop */
+          })
+          .finally(() => {
+            qrScanner.clear().catch(() => {});
+            createAndStartScanner(facingMode);
+          });
+      } else {
+        createAndStartScanner(facingMode);
       }
-      html5QrcodeScanner = new Html5Qrcode("reader");
-      const config = { fps: 10, qrbox: 250 };
+    }
 
-      html5QrcodeScanner
+    // 7) Helper to create a new Html5Qrcode() instance and start scanning
+    function createAndStartScanner(facingMode) {
+      qrScanner = new Html5Qrcode("reader");
+      const config = {
+        fps: 10,        // scan frames per second
+        qrbox: 250,     // 250×250px scanning box
+        experimentalFeatures: {
+          useBarCodeDetectorIfSupported: true
+        }
+      };
+      const constraints = { facingMode: facingMode };
+
+      qrScanner
         .start(
-          cameraId,
+          constraints,
           config,
           onScanSuccess,
           onScanFailure
         )
         .then(() => {
-          statusEl.textContent = "📷 Scanning with selected camera…";
+          setStatus("📷 Scanning with “" + (facingMode === "user" ? "Front" : "Rear") + "” camera…");
         })
         .catch(err => {
-          statusEl.textContent = "❌ Camera error: " + err;
+          setStatus("❌ Error starting camera: " + err);
         });
     }
 
-    // Populate the camera dropdown and set up change handling
-    function initializeCameraSelection() {
-      Html5Qrcode.getCameras().then(cameras => {
-        // Clear old options
-        cameraSelectEl.innerHTML = "";
-        if (!cameras || cameras.length === 0) {
-          cameraSelectEl.innerHTML = "<option value=''>No cameras found</option>";
-          statusEl.textContent = "❌ No cameras detected on this device.";
-          return;
-        }
-
-        // Add an option for each camera
-        cameras.forEach((cam, index) => {
-          // Try to label “Back” vs “Front” when possible
-          // Some devices include “rear” or “front” in label; otherwise use index
-          let label = cam.label || `Camera ${index + 1}`;
-          label = label.toLowerCase().includes("front")
-            ? "📱 Front (selfie)"
-            : label.toLowerCase().includes("back")
-            ? "📷 Rear"
-            : `Camera ${index + 1}`;
-          const option = document.createElement("option");
-          option.value = cam.id;
-          option.textContent = label;
-          cameraSelectEl.appendChild(option);
-        });
-
-        // Default to the first camera
-        currentCameraId = cameras[0].id;
-        cameraSelectEl.value = currentCameraId;
-        startScanner(currentCameraId);
-      })
-      .catch(err => {
-        cameraSelectEl.innerHTML = "<option value=''>Cannot access cameras</option>";
-        statusEl.textContent = "❌ Could not get camera list: " + err;
-      });
-    }
-
-    // When the user picks a different camera from the dropdown
-    cameraSelectEl.addEventListener("change", () => {
-      const newCameraId = cameraSelectEl.value;
-      if (!newCameraId) return;
-      if (newCameraId === currentCameraId) return;
-      currentCameraId = newCameraId;
-      statusEl.textContent = "🔄 Switching camera…";
-      startScanner(currentCameraId);
+    // 8) Wire up button clicks
+    document.getElementById("btnRear").addEventListener("click", () => {
+      setStatus("🔄 Switching to Rear Camera…");
+      startCamera("environment");
+    });
+    document.getElementById("btnFront").addEventListener("click", () => {
+      setStatus("🔄 Switching to Front Camera…");
+      startCamera("user");
     });
 
-    // On page load, initialize camera list
+    // 9) On page load, default to rear camera
     window.addEventListener("DOMContentLoaded", () => {
-      initializeCameraSelection();
+      startCamera("environment");
     });
   </script>
 </body>
