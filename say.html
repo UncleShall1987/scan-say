@@ -2,12 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Scan & Speak QR</title>
+  <title>Scan & Speak QR (with Camera Switch)</title>
   <style>
     body {
       font-family: sans-serif;
       margin: 1.5rem;
       text-align: center;
+    }
+    #cameraSelect {
+      font-size: 1rem;
+      padding: 0.5rem;
+      margin-bottom: 1rem;
     }
     #reader {
       width: 100%;
@@ -22,96 +27,143 @@
       font-size: 1.25rem;
     }
   </style>
-  <!-- 1) Load the html5-qrcode library from CDN -->
+
+  <!-- Load html5-qrcode from CDN -->
   <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body>
-  <h1>🔍 Scan a QR to Hear the Name 🔈</h1>
+  <h1>🔍 Scan & Speak QR 🔈</h1>
+
+  <!-- Camera dropdown -->
+  <select id="cameraSelect">
+    <option value="">Loading cameras...</option>
+  </select>
+
+  <!-- QR reader placeholder -->
   <div id="reader"></div>
+
   <div id="status">Point your camera at a QR code…</div>
 
   <script>
-    // 2) Once a QR is detected, this callback runs with the decoded text.
+    // Reference to html5-qrcode scanner instance
+    let html5QrcodeScanner = null;
+    let currentCameraId = null;
+
+    const statusEl = document.getElementById("status");
+    const cameraSelectEl = document.getElementById("cameraSelect");
+
+    // Called whenever a QR is successfully decoded
     function onScanSuccess(decodedText, decodedResult) {
-      // Stop further scanning as soon as we get one result:
-      html5QrcodeScanner.clear().catch(error => {
-        console.error("Failed to clear QR scanner:", error);
+      // Stop further scanning immediately
+      html5QrcodeScanner.clear().catch(err => {
+        console.warn("Failed to clear QR scanner:", err);
       });
 
-      // 3) Interpret the decodedText:
-      //    - If your QR contains a full URL with ?name=Foo%20Bar, extract the 'name' param.
-      //    - Otherwise, assume the QR is just the plain name itself.
+      // Determine the name to speak:
       let nameToSpeak = decodedText;
-
-      // If decodedText looks like a URL and has “?name=”:
       try {
+        // If the QR text is a URL with ?name=XYZ, extract that
         const url = new URL(decodedText);
         const maybeName = url.searchParams.get("name");
         if (maybeName) {
-          // URL‐decode it before speaking:
           nameToSpeak = maybeName;
         }
       } catch (e) {
-        // not a valid URL—just treat decodedText as the name
+        // Not a URL—use decodedText directly
       }
 
-      document.getElementById("status").textContent = "🔈 Speaking: " + nameToSpeak;
-
-      // 4) Use Web Speech API to speak the name:
+      statusEl.textContent = "🔈 Speaking: " + nameToSpeak;
       const utter = new SpeechSynthesisUtterance(nameToSpeak);
-      // (Optional) You can pick a voice or adjust rate/pitch here:
-      // const voices = speechSynthesis.getVoices();
-      // utter.voice = voices.find(v => v.lang.startsWith("en")) || voices[0];
-      // utter.rate = 1;
-      // utter.pitch = 1;
       speechSynthesis.speak(utter);
 
-      // 5) Optionally, if you want to scan again after speaking is done:
+      // Once speaking ends, update status (optional) and let user switch or rescan
       utter.onend = () => {
-        document.getElementById("status").textContent = "✅ Done speaking. Point again to scan a new QR.";
-        // You can restart the scanner if desired—uncomment below:
-        // html5QrcodeScanner.start(
-        //   { facingMode: "environment" },
-        //   config,
-        //   onScanSuccess,
-        //   onScanFailure
-        // );
+        statusEl.textContent = "✅ Done speaking. Change camera or point at another QR.";
       };
     }
 
+    // Called on scan failure (when no QR is found in a frame)
     function onScanFailure(errorMessage) {
-      // We can ignore or log scan failures (no valid QR in view)
-      //console.warn(`QR scan failed: ${errorMessage}`);
+      // We can ignore / debounce these errors
+      // console.debug("QR scan failure:", errorMessage);
     }
 
-    // 6) Create and configure the html5-qrcode scanner:
-    const html5QrcodeScanner = new Html5Qrcode(/* element id = */ "reader");
-    const config = {
-      fps: 10,    // Scans frames per second
-      qrbox: 250  // 250px square scanning region in the middle
-    };
+    // Start scanning using the given cameraId
+    function startScanner(cameraId) {
+      if (html5QrcodeScanner) {
+        html5QrcodeScanner.clear().catch(() => {
+          /* ignore failure to clear */ 
+        });
+      }
+      html5QrcodeScanner = new Html5Qrcode("reader");
+      const config = { fps: 10, qrbox: 250 };
 
-    // 7) Request camera access and start scanning:
-    Html5Qrcode.getCameras().then(cameras => {
-      if (cameras && cameras.length) {
-        // Use the back camera if available
-        const cameraId = cameras[0].id;
-        html5QrcodeScanner.start(
+      html5QrcodeScanner
+        .start(
           cameraId,
           config,
           onScanSuccess,
           onScanFailure
-        ).catch(err => {
-          document.getElementById("status").textContent =
-            "❌ Camera error: " + err;
+        )
+        .then(() => {
+          statusEl.textContent = "📷 Scanning with selected camera…";
+        })
+        .catch(err => {
+          statusEl.textContent = "❌ Camera error: " + err;
         });
-      } else {
-        document.getElementById("status").textContent =
-          "❌ No camera found.";
-      }
-    }).catch(err => {
-      document.getElementById("status").textContent =
-        "❌ Could not access cameras: " + err;
+    }
+
+    // Populate the camera dropdown and set up change handling
+    function initializeCameraSelection() {
+      Html5Qrcode.getCameras().then(cameras => {
+        // Clear old options
+        cameraSelectEl.innerHTML = "";
+        if (!cameras || cameras.length === 0) {
+          cameraSelectEl.innerHTML = "<option value=''>No cameras found</option>";
+          statusEl.textContent = "❌ No cameras detected on this device.";
+          return;
+        }
+
+        // Add an option for each camera
+        cameras.forEach((cam, index) => {
+          // Try to label “Back” vs “Front” when possible
+          // Some devices include “rear” or “front” in label; otherwise use index
+          let label = cam.label || `Camera ${index + 1}`;
+          label = label.toLowerCase().includes("front")
+            ? "📱 Front (selfie)"
+            : label.toLowerCase().includes("back")
+            ? "📷 Rear"
+            : `Camera ${index + 1}`;
+          const option = document.createElement("option");
+          option.value = cam.id;
+          option.textContent = label;
+          cameraSelectEl.appendChild(option);
+        });
+
+        // Default to the first camera
+        currentCameraId = cameras[0].id;
+        cameraSelectEl.value = currentCameraId;
+        startScanner(currentCameraId);
+      })
+      .catch(err => {
+        cameraSelectEl.innerHTML = "<option value=''>Cannot access cameras</option>";
+        statusEl.textContent = "❌ Could not get camera list: " + err;
+      });
+    }
+
+    // When the user picks a different camera from the dropdown
+    cameraSelectEl.addEventListener("change", () => {
+      const newCameraId = cameraSelectEl.value;
+      if (!newCameraId) return;
+      if (newCameraId === currentCameraId) return;
+      currentCameraId = newCameraId;
+      statusEl.textContent = "🔄 Switching camera…";
+      startScanner(currentCameraId);
+    });
+
+    // On page load, initialize camera list
+    window.addEventListener("DOMContentLoaded", () => {
+      initializeCameraSelection();
     });
   </script>
 </body>
