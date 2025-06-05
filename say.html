@@ -8,6 +8,7 @@
       font-family: sans-serif;
       margin: 1.5rem;
       text-align: center;
+      background: #f5f5f5;
     }
     h1 {
       margin-bottom: 1rem;
@@ -21,6 +22,12 @@
       padding: 0.5rem 1rem;
       margin: 0 0.5rem;
       cursor: pointer;
+      border: 1px solid #666;
+      background: #fff;
+      border-radius: 4px;
+    }
+    #topButtons button:hover {
+      background: #eee;
     }
     #reader {
       width: 100%;
@@ -29,10 +36,12 @@
       border: 2px solid #666;
       border-radius: 8px;
       overflow: hidden;
+      background: #000;
     }
     #status {
       margin-top: 1rem;
       font-size: 1.25rem;
+      min-height: 1.5em;
     }
     #postUI {
       margin-top: 2rem;
@@ -42,35 +51,41 @@
       font-weight: bold;
       font-size: 1.5rem;
       margin: 0.5rem 0;
-      direction: rtl; /* ensure Arabic text is right-to-left */
+      direction: rtl; /* Arabic text runs right-to-left */
     }
     #postUI button {
       font-size: 1rem;
       padding: 0.5rem 1rem;
       margin: 0 0.5rem;
       cursor: pointer;
+      border: 1px solid #666;
+      background: #fff;
+      border-radius: 4px;
+    }
+    #postUI button:hover {
+      background: #eee;
     }
   </style>
 
-  <!-- Load html5-qrcode library from CDN -->
-  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <!-- Include the minified Html5Qrcode library -->
+  <script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
 </head>
 <body>
   <h1>🔍 Scan &amp; Speak QR 🔈</h1>
 
-  <!-- Camera-switch buttons -->
+  <!-- 1) Two buttons for Rear/Front camera -->
   <div id="topButtons">
     <button id="btnRear">📷 Rear Camera</button>
     <button id="btnFront">🤳 Front Camera</button>
   </div>
 
-  <!-- This is where the camera preview lives -->
+  <!-- 2) The camera preview / scanning area will be rendered here -->
   <div id="reader"></div>
 
-  <!-- Status line -->
+  <!-- 3) Status line -->
   <div id="status">Point your camera at a QR code…</div>
 
-  <!-- After a QR is detected, we hide the reader and show this section -->
+  <!-- 4) After a QR is scanned, we hide the reader and show this section -->
   <div id="postUI">
     <div>Detected name:</div>
     <div id="detectedName">—</div>
@@ -79,63 +94,59 @@
   </div>
 
   <script>
-    let qrScanner = null;
+    // === Globals ===
+    let html5QrcodeScanner = null;
     let lastDecodedName = "";
     let currentFacingMode = "environment"; // default to rear camera
 
-    // Called whenever a QR code is successfully decoded
+    // Called when a QR code is successfully decoded
     function onScanSuccess(decodedText, decodedResult) {
-      // Immediately stop the scanner (hides camera preview)
-      qrScanner
-        .stop()
-        .catch(err => {
-          console.warn("Could not stop scanner:", err);
-        })
-        .finally(() => {
-          qrScanner.clear().catch(() => {});
-        });
+      // 1) Stop and clear the scanner (hides camera preview):
+      html5QrcodeScanner.clear().catch(err => {
+        console.warn("Could not clear scanner:", err);
+      });
 
-      // If decodedText is a URL with ?name=Foo%20Bar, extract that
+      // 2) Parse out "?name=" if present, otherwise use raw text
       let nameToSpeak = decodedText;
       try {
-        const url = new URL(decodedText);
-        const maybe = url.searchParams.get("name");
+        const parsedUrl = new URL(decodedText);
+        const maybe = parsedUrl.searchParams.get("name");
         if (maybe) {
           nameToSpeak = maybe;
         }
       } catch (e) {
-        // Not a URL → use raw decodedText
+        // Not a URL → keep decodedText as-is
       }
 
       lastDecodedName = nameToSpeak;
       document.getElementById("detectedName").textContent = nameToSpeak;
 
-      // Hide camera, show post-scan UI
+      // 3) Hide the camera preview, show post-scan UI:
       document.getElementById("reader").style.display = "none";
       document.getElementById("postUI").style.display = "block";
       document.getElementById("status").textContent =
-        "✅ QR detected. Click “Scan Another” to decode a new QR.";
+        "✅ Done speaking. Click “Scan Another” to decode a new QR.";
 
-      // Attempt to auto-speak in Arabic (if a voice is available)
+      // 4) Attempt to auto-speak in Arabic (if an Arabic voice exists)
       speakName();
     }
 
-    // Called on scan failure (i.e. no QR in that frame) – we ignore it
+    // Called when scanning fails on a frame (ignored)
     function onScanFailure(error) {
       // no-op
     }
 
-    // Create and start the Html5Qrcode scanner on the given facingMode
+    // Creates and starts Html5QrcodeScanner with the given facingMode
     function startScanner(facingMode) {
       currentFacingMode = facingMode;
 
-      // If we already have a scanner instance, stop & clear it first
-      if (qrScanner) {
-        qrScanner
-          .stop()
+      // If a scanner already exists, clear it first
+      if (html5QrcodeScanner) {
+        html5QrcodeScanner
+          .clear()
           .catch(() => {})
           .finally(() => {
-            qrScanner.clear().catch(() => {});
+            html5QrcodeScanner = null;
             createAndStartScanner(facingMode);
           });
       } else {
@@ -143,23 +154,26 @@
       }
     }
 
-    // Instantiates Html5Qrcode and begins scanning
+    // Instantiates Html5QrcodeScanner and begins scanning
     function createAndStartScanner(facingMode) {
-      // Reset UI
+      // Reset UI: show camera preview, hide post-scan
       document.getElementById("reader").style.display = "block";
       document.getElementById("postUI").style.display = "none";
       document.getElementById("status").textContent = "⌛ Loading camera…";
 
-      qrScanner = new Html5Qrcode("reader");
+      // Create new scanner instance
+      html5QrcodeScanner = new Html5Qrcode("reader");
+
       const config = {
-        fps: 10, // scan 10 frames per second
+        fps: 10,    // scan 10 frames per second
         qrbox: 250, // 250×250px scanning box
         experimentalFeatures: {
           useBarCodeDetectorIfSupported: true
         }
       };
 
-      qrScanner
+      // Start scanning with the chosen camera (environment / user)
+      html5QrcodeScanner
         .start(
           { facingMode: facingMode },
           config,
@@ -178,12 +192,12 @@
         });
     }
 
-    // Speaks lastDecodedName using an Arabic voice (if one is installed)
+    // Speaks lastDecodedName using an Arabic voice (if available)
     function speakName() {
       if (!lastDecodedName) return;
       const utter = new SpeechSynthesisUtterance(lastDecodedName);
 
-      // Attempt to select an Arabic voice first
+      // Find any Arabic voice (lang starts with "ar")
       const voices = speechSynthesis.getVoices();
       const arVoice = voices.find(v => v.lang.toLowerCase().startsWith("ar"));
       if (arVoice) {
@@ -193,15 +207,17 @@
       speechSynthesis.speak(utter);
     }
 
-    // “Speak Name” button
+    // “Speak Name” button (replay TTS)
     document.getElementById("btnSpeak").addEventListener("click", () => {
       speakName();
     });
 
-    // “Scan Another” button restarts the scanner on the same camera
-    document.getElementById("btnScanAnother").addEventListener("click", () => {
-      startScanner(currentFacingMode);
-    });
+    // “Scan Another” button (restart same camera)
+    document
+      .getElementById("btnScanAnother")
+      .addEventListener("click", () => {
+        startScanner(currentFacingMode);
+      });
 
     // Rear/Front camera buttons
     document.getElementById("btnRear").addEventListener("click", () => {
@@ -211,7 +227,7 @@
       startScanner("user");
     });
 
-    // On page load, start with the rear camera
+    // On page load, start scanning with rear camera by default
     window.addEventListener("DOMContentLoaded", () => {
       startScanner("environment");
     });
