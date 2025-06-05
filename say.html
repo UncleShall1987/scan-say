@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Scan &amp; Speak QR (Front/Rear + “Scan Another”)</title>
+  <title>Scan &amp; Speak QR (Arabic + Voice Selector)</title>
   <style>
     body {
       font-family: sans-serif;
@@ -34,7 +34,7 @@
       margin-top: 2rem;
       display: none; /* hidden until QR is decoded */
     }
-    #postUI button {
+    #postUI button, #voiceSelect {
       font-size: 1rem;
       padding: 0.5rem 1rem;
       margin: 0 0.5rem;
@@ -45,6 +45,20 @@
       font-size: 1.5rem;
       margin: 0.5rem 0;
     }
+    #voiceContainer {
+      margin-top: 1rem;
+      display: none; /* shown only once voices load */
+    }
+    #voiceSelect {
+      font-size: 1rem;
+      padding: 0.3rem;
+      margin-left: 0.5rem;
+    }
+    #noVoicesWarning {
+      color: darkred;
+      margin-top: 1rem;
+      display: none;
+    }
   </style>
 
   <!-- Load html5-qrcode from CDN -->
@@ -53,30 +67,43 @@
 <body>
   <h1>🔍 Scan &amp; Speak QR 🔈</h1>
 
-  <!-- 1) Buttons to choose front or rear camera -->
+  <!-- Buttons to choose front or rear camera -->
   <div id="topButtons">
     <button id="btnRear">📷 Rear Camera</button>
     <button id="btnFront">🤳 Front Camera</button>
   </div>
 
-  <!-- 2) QR reader container -->
+  <!-- QR reader container -->
   <div id="reader"></div>
 
-  <!-- 3) Status / instructions -->
+  <!-- Status / instructions -->
   <div id="status">Point your camera at a QR code…</div>
 
-  <!-- 4) Post‐scan UI (hidden until a QR is decoded) -->
+  <!-- Post-scan UI (hidden until QR is decoded) -->
   <div id="postUI">
     <div>Detected name:</div>
     <div id="detectedName">—</div>
-    <button id="btnSpeak">▶️ Speak Name</button>
+
+    <!-- Voice selection dropdown (hidden until voices are loaded) -->
+    <div id="voiceContainer">
+      <label for="voiceSelect">Choose Voice:</label>
+      <select id="voiceSelect"></select>
+    </div>
+
+    <!-- Speak and Scan Another buttons -->
+    <button id="btnSpeak" disabled>▶️ Speak Name</button>
     <button id="btnScanAnother">🔄 Scan Another</button>
+    <div id="noVoicesWarning">
+      ⚠️ No speech‐synthesis voices available.  
+      If you want Arabic pronunciation, install an Arabic TTS voice pack on your system.
+    </div>
   </div>
 
   <script>
     let qrScanner = null;
     let currentFacingMode = "environment"; // default: rear camera
     let lastDecodedName = "";
+    let availableVoices = [];
 
     const statusEl = document.getElementById("status");
     const readerEl = document.getElementById("reader");
@@ -86,61 +113,71 @@
     const btnScanAnother = document.getElementById("btnScanAnother");
     const btnRear = document.getElementById("btnRear");
     const btnFront = document.getElementById("btnFront");
+    const voiceContainer = document.getElementById("voiceContainer");
+    const voiceSelect = document.getElementById("voiceSelect");
+    const noVoicesWarning = document.getElementById("noVoicesWarning");
 
+    // Utility to update the status message
     function setStatus(msg) {
       statusEl.textContent = msg;
     }
 
     // Called when a QR is successfully decoded
     function onScanSuccess(decodedText, decodedResult) {
-      // 1) Stop scanning immediately
+      // Stop scanning immediately
       qrScanner
         .stop()
         .then(() => {
-          // scanner stopped
+          // scanner stopped successfully
         })
         .catch(err => {
           console.warn("Could not stop scanner:", err);
         });
 
-      // 2) Figure out the name to speak
+      // Figure out the name to speak
       let nameToSpeak = decodedText;
       try {
-        // If decodedText is a URL with ?name=XYZ, extract that
         const url = new URL(decodedText);
         const candidate = url.searchParams.get("name");
         if (candidate) {
           nameToSpeak = candidate;
         }
       } catch (e) {
-        // Not a URL—use decodedText directly
+        // decodedText is not a URL => treat it as plain name
       }
 
       lastDecodedName = nameToSpeak;
       detectedNameEl.textContent = nameToSpeak;
 
-      // 3) Hide the scanner preview, show postUI
+      // Hide the scanner preview, show postUI
       readerEl.style.display = "none";
       postUI.style.display = "block";
-      setStatus("✅ QR detected. You can now speak the name or scan another.");
+      setStatus("✅ QR detected. Now choose a voice and click ▶️ Speak Name.");
+
+      // If voices have already loaded, enable the Speak button
+      if (availableVoices.length > 0) {
+        btnSpeak.disabled = false;
+        voiceContainer.style.display = "block";
+      } else {
+        // No voices available at all
+        btnSpeak.disabled = true;
+        noVoicesWarning.style.display = "block";
+      }
     }
 
-    // Called continuously when no QR is found in a frame (ignored)
+    // Called on scan failure (ignored)
     function onScanFailure(errorMessage) {
       // no-op
     }
 
-    // Create & start a new Html5Qrcode() scanner for a given facingMode
+    // Create & start the scanner for a given facingMode
     function startScanner(facingMode) {
-      // If a scanner already exists, stop & clear it first
       if (qrScanner) {
         qrScanner
           .stop()
-          .catch(() => {
-            /* ignore stop errors */
-          })
+          .catch(() => { /* ignore */ })
           .finally(() => {
-            qrScanner.clear().catch(() => {});
+            qrScanner.clear().catch(() => { /* ignore */ });
             createAndStartScanner(facingMode);
           });
       } else {
@@ -151,9 +188,8 @@
     // Instantiate html5-qrcode and start scanning
     function createAndStartScanner(facingMode) {
       currentFacingMode = facingMode;
-      // Show the preview container, hide postUI
-      readerEl.style.display = "block";
-      postUI.style.display = "none";
+      readerEl.style.display = "block";       // show the camera preview
+      postUI.style.display = "none";          // hide post-scan UI
       setStatus("⌛ Loading camera…");
 
       qrScanner = new Html5Qrcode("reader");
@@ -173,45 +209,95 @@
           onScanFailure
         )
         .then(() => {
-          setStatus("📷 Scanning with “" +
-                    (facingMode === "user" ? "Front" : "Rear") +
-                    "” camera…");
+          setStatus(
+            "📷 Scanning with “" +
+            (facingMode === "user" ? "Front" : "Rear") +
+            "” camera…"
+          );
         })
         .catch(err => {
           setStatus("❌ Error starting camera: " + err);
         });
     }
 
-    // 5) When "Speak Name" is clicked, actually invoke TTS
+    // Speak the lastDecodedName when “Speak Name” is clicked
     btnSpeak.addEventListener("click", () => {
-      if (!lastDecodedName) return;
+      if (!lastDecodedName || availableVoices.length === 0) return;
+
       setStatus("🔈 Speaking: " + lastDecodedName);
+
       const utter = new SpeechSynthesisUtterance(lastDecodedName);
-      speechSynthesis.speak(utter);
+
+      // Pick the voice the user selected, or fallback logic
+      const chosenIndex = parseInt(voiceSelect.value, 10);
+      if (!isNaN(chosenIndex) && availableVoices[chosenIndex]) {
+        utter.voice = availableVoices[chosenIndex];
+      } else {
+        // Fallback: pick first Arabic voice if possible
+        const arabicVoice = availableVoices.find(v => v.lang.startsWith("ar"));
+        utter.voice = arabicVoice || availableVoices[0];
+      }
+
+      // Optionally adjust rate/pitch:
+      // utter.rate = 1;
+      // utter.pitch = 1;
+
       utter.onend = () => {
         setStatus("✅ Done speaking. Click “Scan Another” to decode a new QR.");
       };
+      speechSynthesis.speak(utter);
     });
 
-    // 6) When "Scan Another" is clicked, restart scanning
+    // Restart scanning when “Scan Another” is clicked
     btnScanAnother.addEventListener("click", () => {
       setStatus("🔄 Scanning…");
       startScanner(currentFacingMode);
     });
 
-    // 7) Wire up the camera‐switch buttons
+    // Switch to Rear camera
     btnRear.addEventListener("click", () => {
       setStatus("🔄 Switching to Rear Camera…");
       startScanner("environment");
     });
+
+    // Switch to Front camera
     btnFront.addEventListener("click", () => {
       setStatus("🔄 Switching to Front Camera…");
       startScanner("user");
     });
 
-    // 8) On page load, default to rear camera
+    // Load available voices and populate the dropdown
+    function loadVoices() {
+      const voices = speechSynthesis.getVoices();
+      if (!voices || voices.length === 0) {
+        // No voices yet, wait for onvoiceschanged
+        return;
+      }
+      availableVoices = voices;
+      voiceSelect.innerHTML = ""; // clear any old options
+
+      voices.forEach((v, i) => {
+        const opt = document.createElement("option");
+        // label = e.g. "Microsoft Zeina - ar-LB"
+        opt.textContent = `${v.name} (${v.lang})`;
+        opt.value = i;
+        voiceSelect.appendChild(opt);
+      });
+      // Once voices load, if postUI is visible, enable the speak button
+      if (postUI.style.display === "block") {
+        btnSpeak.disabled = false;
+        voiceContainer.style.display = "block";
+        noVoicesWarning.style.display = "none";
+      }
+    }
+
+    // On Chrome/Edge/Firefox, voices might load a bit after page load
+    speechSynthesis.onvoiceschanged = loadVoices;
+
+    // Kick off voice loading on page load
     window.addEventListener("DOMContentLoaded", () => {
-      startScanner("environment");
+      loadVoices(); // attempt to load immediately
+      startScanner("environment"); // begin with rear camera
     });
   </script>
 </body>
