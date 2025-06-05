@@ -2,68 +2,59 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>🔍 Scan &amp; Speak QR 🔈</title>
+  <title>Camera Test</title>
   <style>
     body {
       font-family: sans-serif;
-      margin: 1.5rem;
+      margin: 1rem;
       text-align: center;
-      background: #f5f5f5;
     }
     h1 {
       margin-bottom: 1rem;
       font-size: 1.5rem;
     }
-    #reader {
+    #video {
       width: 100%;
       max-width: 400px;
-      margin: 0 auto;
-      border: 2px solid #666;
-      border-radius: 8px;
-      overflow: hidden;
+      border: 2px solid #333;
+      border-radius: 4px;
       background: #000;
     }
     #status {
       margin-top: 1rem;
-      font-size: 1.1rem;
-      min-height: 1.2em;
+      color: #333;
     }
   </style>
-
-  <!-- Load the Html5QrcodeScanner from CDN -->
-  <script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
 </head>
 <body>
-  <h1>🔍 Scan QR (Basic Test)</h1>
-  <div id="reader"></div>
-  <div id="status">Loading camera…</div>
+  <h1>🔍 Camera Access Test</h1>
+  <video id="video" autoplay playsinline></video>
+  <div id="status">Click “Start Camera” below.</div>
+  <button id="btnStart">▶️ Start Camera</button>
 
   <script>
-    // Once the DOM is ready, create a new scanner that auto‐renders the camera UI
-    window.addEventListener("DOMContentLoaded", () => {
-      const readerDiv = document.getElementById("reader");
-      const statusDiv = document.getElementById("status");
+    const video = document.getElementById("video");
+    const statusEl = document.getElementById("status");
+    const btn = document.getElementById("btnStart");
 
-      // Create a new scanner with 10 fps and a 250px QR box
-      const html5QrcodeScanner = new Html5QrcodeScanner(
-        "reader",
-        { fps: 10, qrbox: 250 },
-        /* verbose= */ false
-      );
-
-      // onScanSuccess: we’ll just show the decoded text in the status
-      function onScanSuccess(decodedText, decodedResult) {
-        html5QrcodeScanner.clear().catch(() => {});
-        statusDiv.textContent = "Decoded: " + decodedText;
-      }
-
-      // onScanFailure: do nothing (just keep scanning)
-      function onScanFailure(error) {
-        // no-op
-      }
-
-      // Kick off the scanner
-      html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+    btn.addEventListener("click", () => {
+      statusEl.textContent = "📡 Requesting camera permission…";
+      navigator.mediaDevices.getUserMedia({ video: true })
+        .then(stream => {
+          video.srcObject = stream;
+          statusEl.textContent = "✅ Camera stream started. You should see yourself above.";
+          btn.disabled = true;
+        })
+        .catch(err => {
+          console.error("getUserMedia error:", err);
+          if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+            statusEl.textContent = "❌ Permission denied. Please allow camera access.";
+          } else if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
+            statusEl.textContent = "❌ No camera found or constraints not supported.";
+          } else {
+            statusEl.textContent = "❌ Error: " + err.message;
+          }
+        });
     });
   </script>
 </body>
