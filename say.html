@@ -52,8 +52,8 @@
     }
   </style>
 
-  <!-- Include Html5QrcodeScanner from CDN -->
-  <script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
+  <!-- Correct Html5QrcodeScanner include from unpkg -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.7/minified/html5-qrcode.min.js"></script>
 </head>
 <body>
   <h1>🔍 Scan &amp; Speak QR 🔈</h1>
@@ -74,12 +74,61 @@
 
   <script>
     // ===== CONFIGURATION =====
-    // Replace with your actual OpenAI API key:
-    const OPENAI_API_KEY = "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";
+    // Replace with your actual OpenAI API key
+    const OPENAI_API_KEY = "YOUR_OPENAI_API_KEY";
 
     // Model and voice settings for Arabic TTS
     const TTS_MODEL = "gpt-4o-mini-tts";
     const TTS_VOICE = "ar-SA"; // Arabic (Saudi Arabia) dialect
+
+    // Build a Chat Completion TTS request to OpenAI
+    async function speakWithOpenAI(text) {
+      if (!OPENAI_API_KEY) {
+        console.warn("Missing OpenAI API key.");
+        return;
+      }
+      try {
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${OPENAI_API_KEY}`
+          },
+          body: JSON.stringify({
+            model: TTS_MODEL,
+            messages: [
+              { role: "system", content: "You are a helpful assistant that speaks Arabic." },
+              { role: "user", content: text }
+            ],
+            response_format: "audio",
+            voice: TTS_VOICE
+          })
+        });
+
+        if (!response.ok) {
+          console.error("OpenAI API error:", await response.text());
+          return;
+        }
+
+        const data = await response.json();
+        // The API returns base64-encoded audio under data.choices[0].message.audio
+        const audioBase64 = data.choices[0].message.audio;
+        const audioBytes = Uint8Array.from(atob(audioBase64), c => c.charCodeAt(0));
+        const blob = new Blob([audioBytes], { type: "audio/mpeg" });
+        const url = URL.createObjectURL(blob);
+
+        let audio = document.getElementById("ttsAudio");
+        if (!audio) {
+          audio = document.createElement("audio");
+          audio.id = "ttsAudio";
+          document.body.appendChild(audio);
+        }
+        audio.src = url;
+        await audio.play();
+      } catch (err) {
+        console.error("Error during OpenAI TTS:", err);
+      }
+    }
 
     // ===== STATE =====
     let html5QrcodeScanner = null;
@@ -87,7 +136,7 @@
 
     // ===== 1) onScanSuccess =====
     async function onScanSuccess(decodedText, decodedResult) {
-      // Stop & clear the scanner (hides the camera preview)
+      // Stop & clear the scanner (hides camera UI)
       html5QrcodeScanner.clear().catch(() => {});
       html5QrcodeScanner = null;
 
@@ -137,56 +186,7 @@
       html5QrcodeScanner.render(onScanSuccess, onScanFailure);
     }
 
-    // ===== 4) speakWithOpenAI =====
-    async function speakWithOpenAI(text) {
-      if (!OPENAI_API_KEY) {
-        console.warn("Missing OpenAI API key.");
-        return;
-      }
-      try {
-        const response = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${OPENAI_API_KEY}`
-          },
-          body: JSON.stringify({
-            model: TTS_MODEL,
-            messages: [
-              { role: "system", content: "You are a helpful assistant that speaks Arabic." },
-              { role: "user", content: text }
-            ],
-            response_format: "audio",
-            voice: TTS_VOICE
-          })
-        });
-
-        if (!response.ok) {
-          console.error("OpenAI API error:", await response.text());
-          return;
-        }
-
-        const data = await response.json();
-        // The API returns base64-encoded audio under data.choices[0].message.audio
-        const audioBase64 = data.choices[0].message.audio;
-        const audioBytes = Uint8Array.from(atob(audioBase64), c => c.charCodeAt(0));
-        const blob = new Blob([audioBytes], { type: "audio/mpeg" });
-        const url = URL.createObjectURL(blob);
-
-        let audio = document.getElementById("ttsAudio");
-        if (!audio) {
-          audio = document.createElement("audio");
-          audio.id = "ttsAudio";
-          document.body.appendChild(audio);
-        }
-        audio.src = url;
-        await audio.play();
-      } catch (err) {
-        console.error("Error during OpenAI TTS:", err);
-      }
-    }
-
-    // ===== 5) btnSpeak handler =====
+    // ===== 4) “Speak Name” button =====
     document.getElementById("btnSpeak").addEventListener("click", async () => {
       if (lastDecodedName) {
         document.getElementById("status").textContent = "🔄 Re-speaking…";
@@ -196,13 +196,13 @@
       }
     });
 
-    // ===== 6) btnScanAnother handler =====
+    // ===== 5) “Scan Another” button =====
     document.getElementById("btnScanAnother").addEventListener("click", () => {
       document.getElementById("status").textContent = "Point your camera at a QR code…";
       startScanner();
     });
 
-    // ===== 7) On page load, start scanning =====
+    // ===== 6) On page load, start scanning =====
     window.addEventListener("DOMContentLoaded", () => {
       startScanner();
     });
