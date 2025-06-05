@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>QR → Arabic Name Scanner + OpenAI TTS</title>
+  <title>QR → Arabic Name Scanner + VoiceRSS TTS</title>
 
-  <!-- Html5QrcodeScanner library (CDN) -->
+  <!-- Html5QrcodeScanner library (from CDN) -->
   <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 
   <style>
@@ -30,7 +30,7 @@
     #name-display {
       font-size: 1.5em;
       margin: 20px 0;
-      direction: rtl; /* RTL for Arabic text */
+      direction: rtl; /* Right-to-left for Arabic text */
     }
     button {
       padding: 10px 20px;
@@ -55,25 +55,24 @@
 
   <script>
     // ───────────────────────────────────────────────────────────────────────────────
-    // ► Paste your OpenAI key here (the user provided “sk-proj-ItVWhD…”).
-    //   WARNING: For a production app, do NOT store your secret key in client-side code.
-    const OPENAI_KEY = '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';
+    // Your VoiceRSS API key (for high-quality Arabic TTS)
+    const VOICERSS_KEY = '1994072a28604a5d9a23bdc4c3a91ea8';
     // ───────────────────────────────────────────────────────────────────────────────
 
     let currentName = '';
-    let currentAudioUrl = null; // stores the blob URL of the last TTS
+    let currentAudio = null;
     let scanner = null;
 
     /**
-     * (Re)initializes the Html5QrcodeScanner on #reader.
-     * Uses a “soft” camera preference (ideal: environment) to avoid OverconstrainedError.
+     * Initialize (or re-initialize) the Html5QrcodeScanner on #reader
+     * using a “soft” preference for the rear camera.
      */
     function initScanner() {
       // Hide post-scan UI, show scanner UI
       document.getElementById('result-container').style.display = 'none';
       document.getElementById('scanner-container').style.display = 'flex';
 
-      // Clear the #reader container (in case we’re restarting)
+      // Clear out any previous <div id="reader"> node
       const container = document.getElementById('scanner-container');
       container.innerHTML = '<div id="reader"></div>';
 
@@ -86,30 +85,26 @@
         }
       };
 
-      // Instantiate Html5QrcodeScanner
+      // Instantiate the scanner
       scanner = new Html5QrcodeScanner("reader", config, /* verbose= */ false);
       scanner.render(onScanSuccess);
     }
 
     /**
      * Called when a QR code is successfully decoded.
-     * Stops the scanner, extracts an Arabic name, calls OpenAI TTS, and switches UI.
+     * Stops the scanner, extracts Arabic name, builds VoiceRSS URL, plays MP3.
      */
     function onScanSuccess(decodedText, decodedResult) {
-      // 1) Stop & clear the scanner → turns off camera
+      // Stop & clear the scanner (turns off the camera)
       scanner.clear().then(() => {
-        // 2) Extract Arabic name:
-        //    • If decodedText is a URL with “?name=…”, URL-decode that.
+        // 1) Extract Arabic name:
+        //    • If decodedText is a URL with “?name=…”, URL-decode that value.
         //    • Otherwise treat decodedText as plain Arabic text.
         let name = '';
         try {
           const possibleUrl = new URL(decodedText);
           const param = possibleUrl.searchParams.get('name');
-          if (param) {
-            name = decodeURIComponent(param);
-          } else {
-            name = decodedText;
-          }
+          name = param ? decodeURIComponent(param) : decodedText;
         } catch (e) {
           // Not a valid URL → treat as plain Arabic
           name = decodedText;
@@ -118,76 +113,55 @@
         currentName = name;
         document.getElementById('name-display').innerText = name;
 
-        // 3) Call OpenAI TTS endpoint with `model: "tts-1"` and get back an MP3.
-        //    We send JSON: { model:"tts-1", input: name, voice:"alloy", format:"mp3" }
-        //    The response is a binary MP3, which we turn into a Blob, then createObjectURL.
-        fetch("https://api.openai.com/v1/audio/speech", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + OPENAI_KEY
-          },
-          body: JSON.stringify({
-            model: "tts-1",
-            input: name,
-            voice: "alloy",
-            format: "mp3"
-          })
-        })
-        .then(response => {
-          if (!response.ok) {
-            return response.text().then(txt => { throw new Error(txt) });
-          }
-          return response.blob();
-        })
-        .then(blob => {
-          // Create a local URL for the MP3 blob
-          if (currentAudioUrl) {
-            URL.revokeObjectURL(currentAudioUrl);
-          }
-          currentAudioUrl = URL.createObjectURL(blob);
+        // 2) Build the VoiceRSS TTS URL
+        // Example:
+        // https://api.voicerss.org/
+        //   ?key=YOUR_KEY
+        //   &hl=ar-sa
+        //   &c=MP3
+        //   &src=<URL-encoded Arabic text>
+        //   &f=48khz_16bit_stereo
+        const ttsUrl =
+          'https://api.voicerss.org/' +
+          '?key=' + VOICERSS_KEY +
+          '&hl=ar-sa' +
+          '&c=MP3' +
+          '&src=' + encodeURIComponent(name) +
+          '&f=48khz_16bit_stereo';
 
-          // Auto-play the new audio
-          const audio = new Audio(currentAudioUrl);
-          audio.play().catch(err => {
-            console.warn("Autoplay blocked or failed:", err);
-          });
-
-          // 4) Show the “post-scan” UI, hide scanner UI
-          document.getElementById('scanner-container').style.display = 'none';
-          document.getElementById('result-container').style.display = 'flex';
-        })
-        .catch(err => {
-          console.error("Error calling OpenAI TTS:", err);
-          alert("Failed to generate TTS. See console for details.");
-          // If TTS fails, still show the name and let user scan again
-          document.getElementById('scanner-container').style.display = 'none';
-          document.getElementById('result-container').style.display = 'flex';
+        // 3) Create an Audio object and play immediately
+        currentAudio = new Audio(ttsUrl);
+        currentAudio.play().catch(err => {
+          // Some browsers require a user interaction for audio playback.
+          console.warn('Autoplay might be blocked:', err);
         });
-      })
-      .catch(err => {
-        console.error("Error clearing scanner:", err);
+
+        // 4) Show post-scan UI
+        document.getElementById('scanner-container').style.display = 'none';
+        document.getElementById('result-container').style.display = 'flex';
+      }).catch(err => {
+        console.error('Error clearing scanner:', err);
       });
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      // 1) Start scanning immediately on page load
+      // Start scanning as soon as the page loads
       initScanner();
 
-      // 2) “▶️ Speak Name” button: re-play the last TTS blob
+      // “▶️ Speak Name” button: replay the last scanned name
       document.getElementById('speak-btn').addEventListener('click', () => {
-        if (currentAudioUrl) {
-          const audio = new Audio(currentAudioUrl);
-          audio.play().catch(err => {
-            console.warn("Replay blocked:", err);
+        if (currentAudio) {
+          currentAudio.currentTime = 0;
+          currentAudio.play().catch(err => {
+            console.warn('Replay blocked:', err);
           });
         }
       });
 
-      // 3) “🔄 Scan Another”: clear old scanner & restart
+      // “🔄 Scan Another” button: re-initialize the scanner (no page reload)
       document.getElementById('scan-btn').addEventListener('click', () => {
         if (scanner) {
-          scanner.clear().catch(() => { /* ignore errors */ });
+          scanner.clear().catch(() => {}); // best-effort clear
         }
         initScanner();
       });
