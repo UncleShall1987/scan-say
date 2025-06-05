@@ -1,180 +1,299 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ar">
 <head>
-  <meta charset="UTF-8" />
-  <title>QR → Arabic Name Scanner with TTS</title>
-
-  <!-- Html5QrcodeScanner library (from CDN) -->
-  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
-
-  <style>
-    /* Basic reset & centering */
-    html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      font-family: Arial, sans-serif;
-      background-color: #f9f9f9;
-    }
-    #scanner-container,
-    #result-container {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-    }
-    /* The QR “frame” */
-    #reader {
-      width: 300px;
-      max-width: 90%;
-    }
-    /* Displayed Arabic name */
-    #name-display {
-      font-size: 1.5em;
-      margin: 20px 0;
-      direction: rtl; /* right-to-left text for Arabic */
-    }
-    button {
-      padding: 10px 20px;
-      font-size: 1em;
-      margin: 5px;
-      cursor: pointer;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Arabic Name Scanner & Speaker</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start; /* Align to top to see status message initially */
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f2f5;
+            padding-top: 20px;
+            box-sizing: border-box;
+        }
+        #app-container {
+            width: 95%;
+            max-width: 600px;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        #qr-reader {
+            width: 100%;
+            border: 1px solid #ccc;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+            overflow: hidden; /* Ensures child elements like video don't overflow */
+        }
+        /* Styling for the Html5QrcodeScanner's camera selection dropdown if needed */
+        #qr-reader select {
+            margin-top: 10px !important;
+            padding: 8px !important;
+            border-radius: 4px !important;
+            border: 1px solid #ccc !important;
+            background-color: white !important;
+        }
+        .result-container {
+            text-align: center;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .arabic-name {
+            font-size: 2.5em; /* Larger font for Arabic name */
+            margin-bottom: 25px;
+            color: #333;
+            font-weight: 500;
+            direction: rtl; /* Ensure Arabic text is right-to-left */
+        }
+        .controls button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 1.1em;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 8px;
+            transition: background-color 0.2s ease-in-out, transform 0.1s ease;
+            min-width: 180px;
+        }
+        .controls button:hover {
+            background-color: #0056b3;
+        }
+        .controls button:active {
+            transform: scale(0.98);
+        }
+        .controls button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .hidden {
+            display: none !important;
+        }
+        #status-message {
+            margin-bottom: 15px;
+            color: #555;
+            text-align: center;
+            min-height: 20px; /* Reserve space for messages */
+            font-size: 0.95em;
+        }
+        #app-title {
+            font-size: 1.8em;
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+    </style>
 </head>
 <body>
-  <!-- Scanner view (shown on page load and when “Scan Another” is clicked) -->
-  <div id="scanner-container">
-    <!-- Html5QrcodeScanner will inject its UI into this DIV -->
-    <div id="reader"></div>
-  </div>
+    <div id="app-container">
+        <h1 id="app-title">ماسح ومنطوق الأسماء العربية</h1>
+        <div id="status-message">الرجاء الانتظار...</div>
 
-  <!-- Post-scan view (hidden until a QR is decoded) -->
-  <div id="result-container" style="display: none;">
-    <p id="name-display"></p>
-    <button id="speak-btn">▶️ Speak Name</button>
-    <button id="scan-btn">🔄 Scan Another</button>
-  </div>
+        <div id="scanner-container">
+            <div id="qr-reader"></div>
+        </div>
 
-  <script>
-    // Your VoiceRSS API key
-    const VOICERSS_KEY = '1994072a28604a5d9a23bdc4c3a91ea8';
+        <div id="result-container" class="result-container hidden">
+            <div id="detected-name" class="arabic-name"></div>
+            <div class="controls">
+                <button id="speak-name-button" disabled>▶️ نطق الاسم</button>
+                <button id="scan-another-button">🔄 مسح رمز جديد</button>
+            </div>
+        </div>
+    </div>
 
-    let currentName = '';
-    let currentAudio = null;
-    let scanner = null;
+    <audio id="tts-audio" style="display:none;"></audio>
 
-    /**
-     * Initializes (or re-initializes) the Html5QrcodeScanner on #reader,
-     * automatically opening the rear camera.
-     */
-    function initScanner() {
-      // Hide the “post-scan” UI, show the scanner UI
-      document.getElementById('result-container').style.display = 'none';
-      document.getElementById('scanner-container').style.display = 'flex';
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script>
+        // Fallback definitions for library constants (though they should be available globally)
+        const Html5QrcodeScanType = window.Html5QrcodeScanType || { SCAN_TYPE_CAMERA: 0 };
+        const Html5QrcodeScannerState = window.Html5QrcodeScannerState || { SCANNING: 1, PAUSED: 2, IDLE: 0 }; // IDLE is often 0 or similar for "not scanning"
 
-      // Clear out the #reader DIV (in case we’re re-instantiating)
-      const scannerContainer = document.getElementById('scanner-container');
-      scannerContainer.innerHTML = '<div id="reader"></div>';
+        document.addEventListener('DOMContentLoaded', () => {
+            const qrReaderDivId = "qr-reader";
+            const scannerContainer = document.getElementById('scanner-container');
+            const resultContainer = document.getElementById('result-container');
+            const detectedNameDiv = document.getElementById('detected-name');
+            const speakNameButton = document.getElementById('speak-name-button');
+            const scanAnotherButton = document.getElementById('scan-another-button');
+            const ttsAudio = document.getElementById('tts-audio');
+            const statusMessage = document.getElementById('status-message');
 
-      // Configuration: 10 FPS, 250×250 box, auto-select rear camera (“environment”)
-      const config = {
-        fps: 10,
-        qrbox: 250,
-        videoConstraints: { facingMode: { exact: "environment" } }
-      };
+            const voiceRSSApiKey = "1994072a28604a5d9a23bdc4c3a91ea8";
+            let currentArabicName = "";
+            let currentTtsUrl = "";
+            let html5QrcodeScanner; // Instance of Html5QrcodeScanner
 
-      // Create a new Html5QrcodeScanner instance
-      scanner = new Html5QrcodeScanner(
-        "reader",
-        config,
-        /* verbose= */ false
-      );
+            if (window.location.protocol !== "https:" && window.location.hostname !== "localhost" && !window.location.hostname.startsWith("127.")) {
+                statusMessage.innerHTML = "<b>تنبيه أمني:</b> يتطلب الوصول إلى الكاميرا اتصالاً آمناً (HTTPS) أو العمل على المضيف المحلي (localhost). يرجى إعادة تحميل الصفحة باستخدام HTTPS.";
+                if(scannerContainer) scannerContainer.style.display = 'none';
+                return;
+            }
 
-      // Start scanning. onScanSuccess will be called as soon as a QR is detected.
-      scanner.render(onScanSuccess);
-    }
+            function initializeScanner() {
+                const qrReaderElement = document.getElementById(qrReaderDivId);
+                if (!qrReaderElement) {
+                    console.error("QR Reader element not found.");
+                    statusMessage.textContent = "خطأ: لم يتم العثور على عنصر قارئ QR.";
+                    return;
+                }
+                qrReaderElement.innerHTML = ''; // Clear previous scanner UI
 
-    /**
-     * Called by Html5QrcodeScanner when a QR code is successfully decoded.
-     * @param {string} decodedText  – the raw text from the QR
-     * @param {*} decodedResult
-     */
-    function onScanSuccess(decodedText, decodedResult) {
-      // Stop & clear the scanner so the camera turns off
-      scanner.clear().then(() => {
-        // 1. Extract an Arabic name:
-        //    • If decodedText is a URL containing “?name=…”, grab that parameter.
-        //    • Otherwise, assume decodedText is the plain Arabic string.
-        let name = '';
-        try {
-          const url = new URL(decodedText);
-          const param = url.searchParams.get('name');
-          if (param) {
-            // URL-decode “name” and use it
-            name = decodeURIComponent(param);
-          } else {
-            // It was a URL but no “name=” present → use the full text
-            name = decodedText;
-          }
-        } catch (e) {
-          // Not a valid URL → assume plain Arabic text
-          name = decodedText;
-        }
+                scannerContainer.classList.remove('hidden');
+                resultContainer.classList.add('hidden');
+                statusMessage.textContent = "جاري تهيئة الماسح الضوئي...";
 
-        currentName = name;
-        // Display the Arabic name on screen
-        document.getElementById('name-display').innerText = name;
+                const scannerConfig = {
+                    fps: 10,
+                    qrbox: (viewfinderWidth, viewfinderHeight) => {
+                        const minDimension = Math.min(viewfinderWidth, viewfinderHeight);
+                        const qrBoxSize = Math.min(280, Math.floor(minDimension * 0.75)); // Adjusted size
+                        return { width: qrBoxSize, height: qrBoxSize };
+                    },
+                    rememberLastUsedCamera: true,
+                    videoConstraints: {
+                        facingMode: "environment" // Prioritize rear camera
+                    },
+                    supportedScanTypes: [Html5QrcodeScanType.SCAN_TYPE_CAMERA]
+                };
 
-        // 2. Build the VoiceRSS TTS URL
-        const ttsUrl =
-          'https://api.voicerss.org/' +
-          '?key=' + VOICERSS_KEY +
-          '&hl=ar-sa' +
-          '&c=MP3' +
-          '&src=' + encodeURIComponent(name) +
-          '&f=48khz_16bit_stereo';
+                try {
+                    html5QrcodeScanner = new Html5QrcodeScanner(
+                        qrReaderDivId,
+                        scannerConfig,
+                        /* verbose= */ false
+                    );
+                    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+                    statusMessage.textContent = "ضع رمز QR في إطار العرض. اسمح بالوصول إلى الكاميرا إذا طُلب منك.";
+                } catch (e) {
+                    console.error("Error initializing Html5QrcodeScanner:", e);
+                    statusMessage.textContent = "فشل تهيئة الماسح الضوئي. تأكد من أن متصفحك يدعم الوصول إلى الكاميرا وحاول تحديث الصفحة.";
+                }
+            }
 
-        // 3. Create an Audio object, auto-play it
-        currentAudio = new Audio(ttsUrl);
-        currentAudio.play().catch(err => {
-          // In some browsers, autoplay may be blocked unless there was a user gesture.
-          console.warn('Autoplay was blocked:', err);
+            function onScanSuccess(decodedText, decodedResult) {
+                console.log(`Scan detected: ${decodedText}`, decodedResult);
+                statusMessage.textContent = "تم اكتشاف رمز QR! جاري المعالجة...";
+
+                if (html5QrcodeScanner && typeof html5QrcodeScanner.clear === 'function') {
+                    html5QrcodeScanner.clear()
+                        .then(() => {
+                            console.log("Html5QrcodeScanner cleared successfully after scan.");
+                        })
+                        .catch(error => {
+                            console.error("Error clearing Html5QrcodeScanner after scan:", error);
+                        })
+                        .finally(() => {
+                            processDecodedText(decodedText);
+                        });
+                } else {
+                    processDecodedText(decodedText);
+                }
+            }
+            
+            function processDecodedText(decodedText) {
+                let arabicName = "";
+                let nameFound = false;
+
+                try {
+                    let urlObj;
+                    try { urlObj = new URL(decodedText); } catch (_) { /* Not a valid URL, proceed */ }
+
+                    if (urlObj && (urlObj.protocol === "http:" || urlObj.protocol === "https:")) {
+                        if (urlObj.searchParams.has("name")) {
+                            arabicName = decodeURIComponent(urlObj.searchParams.get("name"));
+                            nameFound = true;
+                            console.log("Extracted name from URL parameter:", arabicName);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error during name extraction from URL logic:", e);
+                }
+
+                if (!nameFound) {
+                    arabicName = decodedText;
+                    console.log("Using plain decoded text as name:", arabicName);
+                }
+
+                currentArabicName = arabicName.trim();
+
+                if (!currentArabicName) {
+                    detectedNameDiv.textContent = "خطأ: لم يتمكن من استخلاص اسم صالح من رمز QR.";
+                    speakNameButton.disabled = true;
+                } else {
+                    detectedNameDiv.textContent = currentArabicName;
+                    speakNameButton.disabled = false;
+                    speakText(currentArabicName);
+                }
+
+                scannerContainer.classList.add('hidden');
+                resultContainer.classList.remove('hidden');
+            }
+
+
+            function onScanFailure(error) {
+                // This can be called frequently. Keep logging minimal unless debugging.
+                // Example: if (error.toLowerCase().includes("no qr code found")) {
+                //    statusMessage.textContent = "جاري البحث عن رمز QR...";
+                // }
+            }
+
+            function speakText(text) {
+                if (!text) {
+                    console.warn("SpeakText called with no text.");
+                    return;
+                }
+                const encodedText = encodeURIComponent(text);
+                currentTtsUrl = `https://api.voicerss.org/?key=${voiceRSSApiKey}&hl=ar-sa&c=MP3&src=${encodedText}&f=48khz_16bit_stereo`;
+                
+                ttsAudio.src = currentTtsUrl;
+                ttsAudio.play().catch(e => {
+                    console.error("Error playing TTS audio:", e);
+                    if (e.name === "NotAllowedError") {
+                        statusMessage.textContent = "تم حظر التشغيل التلقائي للصوت. انقر على 'نطق الاسم' للتشغيل.";
+                    } else {
+                        statusMessage.textContent = "خطأ في تشغيل الصوت. انقر على 'نطق الاسم' للمحاولة مرة أخرى.";
+                    }
+                });
+            }
+
+            speakNameButton.addEventListener('click', () => {
+                if (currentTtsUrl) {
+                    ttsAudio.currentTime = 0;
+                    ttsAudio.play().catch(e => {
+                        console.error("Error re-playing TTS audio:", e);
+                        statusMessage.textContent = "خطأ في إعادة تشغيل الصوت.";
+                    });
+                } else if (currentArabicName) {
+                    speakText(currentArabicName);
+                } else {
+                    statusMessage.textContent = "لا يوجد اسم مكتشف لنطقه.";
+                }
+            });
+
+            scanAnotherButton.addEventListener('click', () => {
+                currentArabicName = "";
+                currentTtsUrl = "";
+                detectedNameDiv.textContent = "";
+                speakNameButton.disabled = true;
+
+                // The scanner should have been cleared in onScanSuccess.
+                // Re-initialize will clean the div and create a new scanner instance.
+                initializeScanner();
+            });
+
+            initializeScanner(); // Start the scanner on page load
         });
-
-        // 4. Show the “post-scan” UI
-        document.getElementById('scanner-container').style.display = 'none';
-        document.getElementById('result-container').style.display = 'flex';
-      }).catch(err => {
-        console.error('Failed to clear Html5QrcodeScanner:', err);
-      });
-    }
-
-    // Once the DOM is ready, set up event listeners and start the scanner
-    document.addEventListener('DOMContentLoaded', () => {
-      // 1. Initialize scanner on load
-      initScanner();
-
-      // 2. “Speak Name” button: replay the last TTS
-      document.getElementById('speak-btn').addEventListener('click', () => {
-        if (currentAudio) {
-          currentAudio.currentTime = 0;
-          currentAudio.play().catch(err => {
-            console.warn('Play blocked:', err);
-          });
-        }
-      });
-
-      // 3. “Scan Another” button: re-initialize the scanner (no page reload)
-      document.getElementById('scan-btn').addEventListener('click', () => {
-        // If a previous scanner is hanging around, clear it explicitly
-        if (scanner) {
-          scanner.clear().catch(() => {});
-        }
-        initScanner();
-      });
-    });
-  </script>
+    </script>
 </body>
 </html>
