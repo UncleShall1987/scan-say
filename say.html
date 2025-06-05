@@ -2,209 +2,195 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>🔍 Scan &amp; Speak QR (OpenAI TTS)</title>
+  <title>QR → Arabic Name Scanner + OpenAI TTS</title>
+
+  <!-- Html5QrcodeScanner library (CDN) -->
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
   <style>
-    body {
-      font-family: sans-serif;
-      margin: 1.5rem;
-      text-align: center;
-      background: #f5f5f5;
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: Arial, sans-serif;
+      background-color: #f9f9f9;
     }
-    h1 {
-      margin-bottom: 1rem;
-      font-size: 1.75rem;
+    #scanner-container,
+    #result-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
     }
     #reader {
-      width: 100%;
-      max-width: 400px;
-      margin: 0 auto;
-      border: 2px solid #666;
-      border-radius: 8px;
-      overflow: hidden;
-      background: #000;
+      width: 300px;
+      max-width: 90%;
     }
-    #status {
-      margin-top: 1rem;
-      font-size: 1.25rem;
-      min-height: 1.5em;
+    #name-display {
+      font-size: 1.5em;
+      margin: 20px 0;
+      direction: rtl; /* RTL for Arabic text */
     }
-    #postUI {
-      margin-top: 2rem;
-      display: none; /* hidden until a QR is detected */
-    }
-    #detectedName {
-      font-weight: bold;
-      font-size: 1.5rem;
-      margin: 0.5rem 0;
-      direction: rtl; /* Arabic text runs right-to-left */
-    }
-    #postUI button {
-      font-size: 1rem;
-      padding: 0.5rem 1rem;
-      margin: 0 0.5rem;
+    button {
+      padding: 10px 20px;
+      font-size: 1em;
+      margin: 5px;
       cursor: pointer;
-      border: 1px solid #666;
-      background: #fff;
-      border-radius: 4px;
-    }
-    #postUI button:hover {
-      background: #eee;
     }
   </style>
-
-  <!-- Correct Html5QrcodeScanner include from unpkg -->
-  <script src="https://unpkg.com/html5-qrcode@2.3.7/minified/html5-qrcode.min.js"></script>
 </head>
 <body>
-  <h1>🔍 Scan &amp; Speak QR 🔈</h1>
+  <!-- Scanner view (visible on load and whenever you click “Scan Another”) -->
+  <div id="scanner-container">
+    <div id="reader"></div>
+  </div>
 
-  <!-- 1) This div will host the Html5QrcodeScanner UI -->
-  <div id="reader"></div>
-
-  <!-- 2) Status line -->
-  <div id="status">Point your camera at a QR code…</div>
-
-  <!-- 3) After scanning, show detected Arabic text + buttons -->
-  <div id="postUI">
-    <div>Detected name:</div>
-    <div id="detectedName">—</div>
-    <button id="btnSpeak">▶️ Speak Name</button>
-    <button id="btnScanAnother">🔄 Scan Another</button>
+  <!-- Post-scan view (hidden until a QR is decoded) -->
+  <div id="result-container" style="display: none;">
+    <p id="name-display"></p>
+    <button id="speak-btn">▶️ Speak Name</button>
+    <button id="scan-btn">🔄 Scan Another</button>
   </div>
 
   <script>
-    // ===== CONFIGURATION =====
-    // Replace with your actual OpenAI API key
-    const OPENAI_API_KEY = "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";
+    // ───────────────────────────────────────────────────────────────────────────────
+    // ► Paste your OpenAI key here (the user provided “sk-proj-ItVWhD…”).
+    //   WARNING: For a production app, do NOT store your secret key in client-side code.
+    const OPENAI_KEY = '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';
+    // ───────────────────────────────────────────────────────────────────────────────
 
-    // Model and voice settings for Arabic TTS
-    const TTS_MODEL = "gpt-4o-mini-tts";
-    const TTS_VOICE = "ar-SA"; // Arabic (Saudi Arabia) dialect
+    let currentName = '';
+    let currentAudioUrl = null; // stores the blob URL of the last TTS
+    let scanner = null;
 
-    // Build a Chat Completion TTS request to OpenAI
-    async function speakWithOpenAI(text) {
-      if (!OPENAI_API_KEY) {
-        console.warn("Missing OpenAI API key.");
-        return;
-      }
-      try {
-        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    /**
+     * (Re)initializes the Html5QrcodeScanner on #reader.
+     * Uses a “soft” camera preference (ideal: environment) to avoid OverconstrainedError.
+     */
+    function initScanner() {
+      // Hide post-scan UI, show scanner UI
+      document.getElementById('result-container').style.display = 'none';
+      document.getElementById('scanner-container').style.display = 'flex';
+
+      // Clear the #reader container (in case we’re restarting)
+      const container = document.getElementById('scanner-container');
+      container.innerHTML = '<div id="reader"></div>';
+
+      // Soft preference for rear camera:
+      const config = {
+        fps: 10,
+        qrbox: 250,
+        videoConstraints: {
+          facingMode: { ideal: "environment" }
+        }
+      };
+
+      // Instantiate Html5QrcodeScanner
+      scanner = new Html5QrcodeScanner("reader", config, /* verbose= */ false);
+      scanner.render(onScanSuccess);
+    }
+
+    /**
+     * Called when a QR code is successfully decoded.
+     * Stops the scanner, extracts an Arabic name, calls OpenAI TTS, and switches UI.
+     */
+    function onScanSuccess(decodedText, decodedResult) {
+      // 1) Stop & clear the scanner → turns off camera
+      scanner.clear().then(() => {
+        // 2) Extract Arabic name:
+        //    • If decodedText is a URL with “?name=…”, URL-decode that.
+        //    • Otherwise treat decodedText as plain Arabic text.
+        let name = '';
+        try {
+          const possibleUrl = new URL(decodedText);
+          const param = possibleUrl.searchParams.get('name');
+          if (param) {
+            name = decodeURIComponent(param);
+          } else {
+            name = decodedText;
+          }
+        } catch (e) {
+          // Not a valid URL → treat as plain Arabic
+          name = decodedText;
+        }
+
+        currentName = name;
+        document.getElementById('name-display').innerText = name;
+
+        // 3) Call OpenAI TTS endpoint with `model: "tts-1"` and get back an MP3.
+        //    We send JSON: { model:"tts-1", input: name, voice:"alloy", format:"mp3" }
+        //    The response is a binary MP3, which we turn into a Blob, then createObjectURL.
+        fetch("https://api.openai.com/v1/audio/speech", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${OPENAI_API_KEY}`
+            "Authorization": "Bearer " + OPENAI_KEY
           },
           body: JSON.stringify({
-            model: TTS_MODEL,
-            messages: [
-              { role: "system", content: "You are a helpful assistant that speaks Arabic." },
-              { role: "user", content: text }
-            ],
-            response_format: "audio",
-            voice: TTS_VOICE
+            model: "tts-1",
+            input: name,
+            voice: "alloy",
+            format: "mp3"
           })
+        })
+        .then(response => {
+          if (!response.ok) {
+            return response.text().then(txt => { throw new Error(txt) });
+          }
+          return response.blob();
+        })
+        .then(blob => {
+          // Create a local URL for the MP3 blob
+          if (currentAudioUrl) {
+            URL.revokeObjectURL(currentAudioUrl);
+          }
+          currentAudioUrl = URL.createObjectURL(blob);
+
+          // Auto-play the new audio
+          const audio = new Audio(currentAudioUrl);
+          audio.play().catch(err => {
+            console.warn("Autoplay blocked or failed:", err);
+          });
+
+          // 4) Show the “post-scan” UI, hide scanner UI
+          document.getElementById('scanner-container').style.display = 'none';
+          document.getElementById('result-container').style.display = 'flex';
+        })
+        .catch(err => {
+          console.error("Error calling OpenAI TTS:", err);
+          alert("Failed to generate TTS. See console for details.");
+          // If TTS fails, still show the name and let user scan again
+          document.getElementById('scanner-container').style.display = 'none';
+          document.getElementById('result-container').style.display = 'flex';
         });
+      })
+      .catch(err => {
+        console.error("Error clearing scanner:", err);
+      });
+    }
 
-        if (!response.ok) {
-          console.error("OpenAI API error:", await response.text());
-          return;
+    document.addEventListener('DOMContentLoaded', () => {
+      // 1) Start scanning immediately on page load
+      initScanner();
+
+      // 2) “▶️ Speak Name” button: re-play the last TTS blob
+      document.getElementById('speak-btn').addEventListener('click', () => {
+        if (currentAudioUrl) {
+          const audio = new Audio(currentAudioUrl);
+          audio.play().catch(err => {
+            console.warn("Replay blocked:", err);
+          });
         }
+      });
 
-        const data = await response.json();
-        // The API returns base64-encoded audio under data.choices[0].message.audio
-        const audioBase64 = data.choices[0].message.audio;
-        const audioBytes = Uint8Array.from(atob(audioBase64), c => c.charCodeAt(0));
-        const blob = new Blob([audioBytes], { type: "audio/mpeg" });
-        const url = URL.createObjectURL(blob);
-
-        let audio = document.getElementById("ttsAudio");
-        if (!audio) {
-          audio = document.createElement("audio");
-          audio.id = "ttsAudio";
-          document.body.appendChild(audio);
+      // 3) “🔄 Scan Another”: clear old scanner & restart
+      document.getElementById('scan-btn').addEventListener('click', () => {
+        if (scanner) {
+          scanner.clear().catch(() => { /* ignore errors */ });
         }
-        audio.src = url;
-        await audio.play();
-      } catch (err) {
-        console.error("Error during OpenAI TTS:", err);
-      }
-    }
-
-    // ===== STATE =====
-    let html5QrcodeScanner = null;
-    let lastDecodedName = "";
-
-    // ===== 1) onScanSuccess =====
-    async function onScanSuccess(decodedText, decodedResult) {
-      // Stop & clear the scanner (hides camera UI)
-      html5QrcodeScanner.clear().catch(() => {});
-      html5QrcodeScanner = null;
-
-      // Parse "?name=" if present
-      let nameToSpeak = decodedText;
-      try {
-        const parsedUrl = new URL(decodedText);
-        const maybe = parsedUrl.searchParams.get("name");
-        if (maybe) nameToSpeak = maybe;
-      } catch (_) {
-        // Not a URL → raw text
-      }
-
-      lastDecodedName = nameToSpeak;
-      document.getElementById("detectedName").textContent = nameToSpeak;
-
-      // Hide reader, show post-scan UI
-      document.getElementById("reader").style.display = "none";
-      document.getElementById("postUI").style.display = "block";
-      document.getElementById("status").textContent =
-        "✅ Speaking…";
-
-      // Auto-play TTS via OpenAI
-      await speakWithOpenAI(nameToSpeak);
-      document.getElementById("status").textContent =
-        "✅ Done speaking. Click “Scan Another” to scan again.";
-    }
-
-    // ===== 2) onScanFailure (no-op) =====
-    function onScanFailure(error) {
-      // ignore scanning failures per frame
-    }
-
-    // ===== 3) startScanner =====
-    function startScanner() {
-      // Reset UI
-      document.getElementById("reader").style.display = "block";
-      document.getElementById("postUI").style.display = "none";
-      document.getElementById("status").textContent = "⌛ Loading camera…";
-
-      // Instantiate a new Html5QrcodeScanner, which handles camera permission and selector
-      html5QrcodeScanner = new Html5QrcodeScanner(
-        "reader",
-        { fps: 10, qrbox: 250 },
-        false
-      );
-      html5QrcodeScanner.render(onScanSuccess, onScanFailure);
-    }
-
-    // ===== 4) “Speak Name” button =====
-    document.getElementById("btnSpeak").addEventListener("click", async () => {
-      if (lastDecodedName) {
-        document.getElementById("status").textContent = "🔄 Re-speaking…";
-        await speakWithOpenAI(lastDecodedName);
-        document.getElementById("status").textContent =
-          "✅ Done speaking. Click “Scan Another” to scan again.";
-      }
-    });
-
-    // ===== 5) “Scan Another” button =====
-    document.getElementById("btnScanAnother").addEventListener("click", () => {
-      document.getElementById("status").textContent = "Point your camera at a QR code…";
-      startScanner();
-    });
-
-    // ===== 6) On page load, start scanning =====
-    window.addEventListener("DOMContentLoaded", () => {
-      startScanner();
+        initScanner();
+      });
     });
   </script>
 </body>
